@@ -4,7 +4,7 @@ from yahoo_fin import stock_info as si
 import random
 import logging
 from datetime import date
-from pyspark import SparkContext
+import dask.bag as db
 
 random.seed(42)
 
@@ -15,11 +15,21 @@ def get_snp500_list(size = 5):
 
 def get_prediction(query):
     log = logging.getLogger()
-    log.warning(f'running {query}')
+    log.warning(f'running query: {query}')
     name, url, ticker = query
+    if 'TICKER' in url:
+        ticker = ticker.upper()
+        url = url.replace('TICKER','ticker')
     try:
+
         response = requests.get(url.replace('<ticker>', ticker))
-        pred = response.content.lower().decode('UTF-8').strip()
+        res = response.content.lower().decode('UTF-8').strip()
+        if 'buy' in res:
+            pred = 'buy'
+        elif 'sell' in res :
+            pred = 'sell'
+        else:
+            pred = None
     except Exception as e:
         log.warning(f'{e}')
         pred = None
@@ -29,25 +39,23 @@ def get_prediction(query):
 
 if __name__ == '__main__':
     N = 5
-    spark = True
+    dask = True
     df = pd.read_csv('data/endpoints.csv')
     list_ticker = get_snp500_list(N)
     queries = []
     for ticker in list_ticker:
         # i = 0
         for _, row in df.iterrows():
-            # if i == 2:
+            # if i == 1:
             #     break
             queries.append((row['name'], row['url'], ticker))
             # i += 1
     random.shuffle(queries)
-    if spark:
-        sc = SparkContext('local[*]')
-        rdd = sc.parallelize(queries)
-        preds = rdd.map(get_prediction).collect()
+    if dask:
+        b = db.from_sequence(queries)
+        preds = b.map(get_prediction).to_dataframe(columns=['name', 'ticker', 'prediction']).compute()
     else:
         preds = map(get_prediction, queries)
-
-    predictions = pd.DataFrame(columns=['name', 'ticker', 'prediction'], data=preds)
+        predictions = pd.DataFrame(columns=['name', 'ticker', 'prediction'], data=preds)
     date_formated = date.today().strftime("%d-%m-%Y")
-    predictions.to_csv(f'predictions-{date_formated}.csv')
+    preds.to_csv(f'predictions-{date_formated}.csv')
